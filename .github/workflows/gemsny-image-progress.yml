@@ -1,0 +1,81 @@
+name: GemsNY Image Audit - Live Progress
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/gemsny-image-progress.yml'
+      - 'gemsny-image-progress/progress_runner.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Progress shard ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Pull validated GemsNY auditor
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/gorangagarwal90/form-monitor/main/audit.py -o audit.py
+          curl -fsSL https://raw.githubusercontent.com/gorangagarwal90/form-monitor/main/merge.py -o merge.py
+          curl -fsSL https://raw.githubusercontent.com/gorangagarwal90/form-monitor/main/requirements.txt -o requirements.txt
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Run with live page/product progress
+        run: |
+          mkdir -p output/shard-${{ matrix.shard }}
+          python gemsny-image-progress/progress_runner.py \
+            --shard-index ${{ matrix.shard }} \
+            --shard-count 16 \
+            --output-dir output/shard-${{ matrix.shard }}
+      - name: Upload shard results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: progress-audit-shard-${{ matrix.shard }}
+          path: output/shard-${{ matrix.shard }}/
+          if-no-files-found: warn
+          retention-days: 1
+
+  merge:
+    name: Build final Excel
+    needs: audit
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Pull merge tool
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/gorangagarwal90/form-monitor/main/merge.py -o merge.py
+          pip install 'openpyxl>=3.1,<4'
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: progress-audit-shard-*
+          path: shard_artifacts
+      - name: Merge reports
+        env:
+          EXPECTED_SHARDS: '16'
+        run: python merge.py shard_artifacts final_report
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FINAL-GemsNY-Image-Audit-Live-Progress
+          path: final_report/
+          retention-days: 7
